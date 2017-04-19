@@ -1,0 +1,177 @@
+#!/bin/bash
+
+TARGET_RB_BRANCH=""
+TARGET_M_BRANCH=""
+INTER=inter
+BRANCHES=()
+
+colorize() {
+  local color=$1
+  local text=$2
+  case "$color" in
+    red) tput setaf 1;;
+    green) tput setaf 2;;
+    yellow) tput setaf 3;;
+    blue) tput setaf 4;;
+    magenta) tput setaf 5;;
+    *) printf "$color";;
+  esac
+  echo -n "$text"
+  tput sgr0
+}
+
+echo_color() {
+  colorize "$1" "$2"$'\n'
+}
+
+usage() {
+  cat <<HERE
+    --bs   A list of branches to rebase
+    --trb  The target branch to rebase against
+    --tm   The target branch to merge into
+    --i    The name of the intermediate branch that will amalagamate all the commits in the branches you're rebasing. DEFAULT: inter
+HERE
+}
+
+
+grabBranches(){
+  case "$1" in
+    "") return 0;;
+    --*) return 0;;
+    *)
+      BRANCHES+=("$1")
+      shift
+      grabBranches "$@"
+      ;;
+  esac
+}
+
+main() {
+  while [ $# -ne 0 ]; do
+    case $1 in
+      --help) usage; exit;;
+      --trb) TARGET_RB_BRANCH="$2"; shift; shift;;
+      --tm) TARGET_M_BRANCH="$2"; shift; shift;;
+      --i) INTER="$1"; shift; shift;;
+      --bs)
+        shift
+        grabBranches "$@"
+        for b in "${BRANCHES[@]}"; do
+          shift
+        done
+        ;;
+      *) shift;;
+    esac
+  done
+
+  checkPrescense $TARGET_M_BRANCH "No branch to merge into (--tm) provided"
+
+  checkPrescense $TARGET_RB_BRANCH "No target rebase branch (--trb) provided"
+
+  if [ ${#BRANCHES[@]} -eq 0 ]; then
+    >&2 echo_color red "No branches specified to rebase (--bs) provided"
+    exit
+  fi
+
+  echo $BRANCHES
+  echo $TARGET_RB_BRANCH
+  echo $TARGET_M_BRANCH
+
+  echo_color green "Checking out target branch $TARGET_RB_BRANCH to rebase against..."
+  checkOutOrCreateBranch "" $TARGET_RB_BRANCH
+
+
+  echo_color green "Creating or checking out branch $TARGET_M_BRANCH to merge into..."
+
+  rbBranch=$(git checkout $TARGET_M_BRANCH 2>&1)
+  if [ $? -ne 0 ]; then
+    checkOutOrCreateBranch "-b" $TARGET_M_BRANCH
+  fi
+
+  echo_color green "Creating or checking out intermediate branch $INTER..."
+  iBranch=$(git checkout $INTER 2>&1)
+  if [ $? -ne 0 ]; then
+    checkOutOrCreateBranch "-b" $INTER
+  fi
+
+  # Iterate through branches, rebasing each against $INTER and merging it into $INTER
+  echo_color green "Iterating through branches to rebase..."
+  iterateThroughBranches
+
+  # Final merge into merge branch
+  echo_color green "Rebase and merge of designated branches complete! Merging into provided merge branch..."
+  checkOutOrCreateBranch "" $TARGET_M_BRANCH
+  mergeBranch $INTER
+
+  echo_color green "Deleting intermediate branch $INTER and cleanin up..."
+  deleteBranch $INTER
+
+}
+
+deleteBranch(){
+  x=$(git branch -D $1)
+  if [ $? -ne 0 ]; then
+    >&2 echo_color red "Failed with: $x"
+  fi
+}
+
+checkPrescense(){
+  if [ $1 == "" ]; then
+    >&2 echo_color red "$2"
+    exit
+  fi
+}
+
+iterateThroughBranches() {
+  for b in "${BRANCHES[@]}"; do
+    echo_color yellow "Checking out branch $b..."
+    checkOutOrCreateBranch "" $b
+    echo_color yellow "Rebasing branch $b against intermediate branch $INTER..."
+    rebaseBranch
+    checkOutOrCreateBranch "" $INTER
+    echo_color yellow "Merging branch $b against intermediate branch $INTER..."
+    mergeBranch $b
+  done
+}
+
+mergeBranch() {
+  x=$(git merge $1 2>&1)
+  if [ $? -ne 0 ]; then
+    >&2 echo_color red "Failed with: $x"
+  fi
+}
+
+rebaseBranch() {
+  x=$(git rebase $INTER 2>&1)
+  if [ $? -ne 0 ]; then
+    rebaseConflict
+    rebaseContinue
+  fi
+}
+
+rebaseContinue() {
+  y=$(git rebase --continue 2>&1)
+  if [ $? -ne 0 ]; then
+    rebaseConflict
+    rebaseContinue
+  fi
+}
+
+rebaseConflict() {
+  echo_color magenta "Uh-oh. Looks like you have merge conficts. Go ahead and fix them and let me know when you're done"
+  read -p "Press any key to continue: " key
+}
+
+checkOutOrCreateBranch() {
+  x=$(git checkout $1 $2 2>&1)
+  if [ $? -ne 0 ]; then
+    >&2 echo_color red "Failed with: $x"
+  fi
+}
+
+if [ $# -eq 0 ]; then
+  >&2 usage
+  exit
+fi
+
+main $@
