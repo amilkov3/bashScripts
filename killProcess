@@ -1,0 +1,34 @@
+#!/bin/bash
+
+usage (){
+  cat <<HERE
+    --p   Port number process is bound to
+HERE
+}
+
+PORT=""
+
+main (){
+  while [ $# -ne 0]; do
+    case $1 in
+      --p) PORT=$2; shift; shift;;
+      *) shift;
+    esac
+  done
+
+  pid=$(netstat -vanp tcp | grep $PORT | awk '{print $9}')
+  kill -9 $pid
+
+  if [ $? -ne 0 ]; then
+    >&2 echo "Unable to kill process"; exit;
+  fi
+
+  echo "Done!"
+
+}
+
+if [ $# -eq 0 ]; then
+  >&2 usage; exit;
+fi
+
+main "$@"
